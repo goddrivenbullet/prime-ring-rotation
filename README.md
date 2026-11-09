@@ -1,4 +1,3 @@
 # Prime Ring Rotation
 
-Interactive nested prime-shell sphere with drag-rotate, pinch-zoom, and continuous ring growth.
-Open the GitHub Pages URL on a phone (Safari).
+Unit-sphere meridian rings: each ring is a great circle through the polar axis, stepped 1° clockwise until 360 rings complete the sphere. Primes in band [360k, 360k+359] become dots. Drag / pinch / ± to explore.
