@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#05080f">
 <title>Prime Ring Rotation</title>
-<!-- prime-ring-rotation-v4 -->
+<!-- prime-ring-rotation-v5 -->
 <style>
 html,body{margin:0;width:100%;height:100%;height:100dvh;background:#05080f;overflow:hidden;position:fixed;inset:0;touch-action:none;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 canvas{display:block;width:100%;height:100%;touch-action:none;overscroll-behavior:none;outline:none}
@@ -31,65 +31,52 @@ canvas{display:block;width:100%;height:100%;touch-action:none;overscroll-behavio
 <script>
 (function(){
 'use strict';
-const MARKER='prime-ring-rotation-v4';
+const MARKER='prime-ring-rotation-v5';
+const STORE_KEY='prr_v5_state';
 const cv=document.getElementById('c'),ctx=cv.getContext('2d',{alpha:false});
 
-/* ---- Miller–Rabin (deterministic for n < 2^64; uses BigInt mul) ---- */
+/* ---- Miller–Rabin: deterministic for n < 3.317e24 with witnesses 2..41 ---- */
 function modPow(b,e,m){let r=1n;b%=m;while(e>0n){if(e&1n)r=(r*b)%m;b=(b*b)%m;e>>=1n}return r}
+const MR_WIT=[2n,3n,5n,7n,11n,13n,17n,19n,23n,29n,31n,37n,41n];
 function isP(n){
-  if(typeof n==='number'){if(n<2)return false;n=BigInt(n)}
+  if(typeof n!=='bigint')n=BigInt(n);
   if(n<2n)return false; if(n%2n===0n)return n===2n;
   if(n%3n===0n)return n===3n; if(n%5n===0n)return n===5n;
-  // write n-1 = d * 2^s
   let d=n-1n,s=0n; while((d&1n)===0n){d>>=1n;s++}
-  const witnesses=n<(4759123141n)?[2n,7n,61n]:[2n,3n,5n,7n,11n,13n,23n];
-  for(const a of witnesses){
+  for(const a of MR_WIT){
     if(a>=n)continue;
     let x=modPow(a,d,n);
     if(x===1n||x===n-1n)continue;
-    let skip=false;
-    for(let r=1n;r<s;r++){x=(x*x)%n;if(x===n-1n){skip=true;break}}
-    if(!skip)return false;
+    let ok=false;
+    for(let r=1n;r<s;r++){x=(x*x)%n;if(x===n-1n){ok=true;break}}
+    if(!ok)return false;
   }
   return true;
 }
 function bandThetas(g){
-  const th=[]; const lo=360n*BigInt(g); const hi=lo+360n;
+  const th=[]; const lo=360n*BigInt(g), hi=lo+360n;
   for(let m=lo;m<hi;m++){
-    if(m>5n && isP(m)) th.push(Number(m%360n)*Math.PI/180);
+    if(m>5n&&isP(m)) th.push(Number(m%360n)*Math.PI/180);
   }
   return th;
 }
 
-/* ---- Pole schedule ----
-   D=0: T=0..180 (north once, then down to south).
-   D=1..359: T=1..180.
-   Note: T=180 is the same south pole for every D (coincide); kept per schedule = 1+180*360 = 64801 poles.
-*/
-const POLES=[];
-(function buildPoles(){
-  POLES.push({T:0,D:0});
-  for(let D=0;D<360;D++) for(let T=1;T<=180;T++) POLES.push({T,D});
-})();
-const N_POLES=POLES.length; // 64801
-const PER=360;
-const TOTAL_RINGS=N_POLES*PER;
-const DEG_MS=70; // ~25s per pole sweep at 1×
-const MAX_KEEP=720;
+/* ---- Pole schedule: 64801 poles; T=180 coincides as south for every D ---- */
+const POLES=[{T:0,D:0}];
+for(let D=0;D<360;D++) for(let T=1;T<=180;T++) POLES.push({T,D});
+const N_POLES=POLES.length, PER=360;
+const DEG_MS=70, MAX_KEEP=720;
 const UZ_MIN=.3,UZ_MAX=8;
 
 function poleAxis(T,D){
   const Td=T*Math.PI/180, Dd=D*Math.PI/180;
-  const sT=Math.sin(Td), cT=Math.cos(Td), cD=Math.cos(Dd), sD=Math.sin(Dd);
-  // â0=(sT,cT,0) then Ry_cw(D): tilt toward +x, then around polar
-  return [sT*cD, cT, -sT*sD];
+  const sT=Math.sin(Td), cT=Math.cos(Td);
+  return [sT*Math.cos(Dd), cT, -sT*Math.sin(Dd)];
 }
 function poleE(T,D){
-  // ê0=(0,0,1) rotated Ry_cw(D) → (sin D, 0, cos D)
   const Dd=D*Math.PI/180;
   return [Math.sin(Dd), 0, Math.cos(Dd)];
 }
-/** Base point on meridian A=0, then Rodrigues-rotate about â by A (clockwise from tip). */
 function pointOnRing(T,D,Adeg,th){
   const a=poleAxis(T,D), e=poleE(T,D);
   const cth=Math.cos(th), sth=Math.sin(th);
@@ -97,26 +84,73 @@ function pointOnRing(T,D,Adeg,th){
   if(!Adeg) return [vx,vy,vz];
   const A=Adeg*Math.PI/180, c=Math.cos(A), s=Math.sin(A);
   const kx=a[0],ky=a[1],kz=a[2];
-  const cx=ky*vz-kz*vy, cy=kz*vx-kx*vz, cz=kx*vy-ky*vx; // k×v
+  const cx=ky*vz-kz*vy, cy=kz*vx-kx*vz, cz=kx*vy-ky*vx;
   const kd=kx*vx+ky*vy+kz*vz;
-  return [
-    vx*c + cx*s + kx*kd*(1-c),
-    vy*c + cy*s + ky*kd*(1-c),
-    vz*c + cz*s + kz*kd*(1-c)
-  ];
+  return [vx*c+cx*s+kx*kd*(1-c), vy*c+cy*s+ky*kd*(1-c), vz*c+cz*s+kz*kd*(1-c)];
+}
+function poleOfG(g){
+  const pi = Math.floor(Number(g)/PER) % N_POLES;
+  // handle negative safely
+  const p = ((pi%N_POLES)+N_POLES)%N_POLES;
+  return {pi:p, A:(Number(g)%PER+PER)%PER, T:POLES[p].T, D:POLES[p].D};
 }
 
-const rings=[]; // trail: {poleIdx,A,th,T,D}
-const polesVisited=[]; // unique-ish list of {T,D} for faint trace (cap density)
+/* ---- Equal-area-ish ~1° cells (lat bands × cos-lat longitudes) ---- */
+const NLAT=180;
+const cellOff=new Int32Array(NLAT+1);
+for(let i=0;i<NLAT;i++){
+  const lat=(-90+(i+0.5))*Math.PI/180;
+  const nlon=Math.max(1, Math.round(360*Math.max(0.02, Math.cos(lat))));
+  cellOff[i+1]=cellOff[i]+nlon;
+}
+const NCELL=cellOff[NLAT];
+const cellXYZ=new Float32Array(NCELL*3);
+const cellCounts=new Uint32Array(NCELL);
+let nonzero=[]; // list of cell indices with count>0
+const nonzeroSet=new Set();
+(function initCenters(){
+  for(let i=0;i<NLAT;i++){
+    const lat=(-90+(i+0.5))*Math.PI/180;
+    const cl=Math.cos(lat), sl=Math.sin(lat);
+    const nlon=cellOff[i+1]-cellOff[i];
+    for(let j=0;j<nlon;j++){
+      const lon=-Math.PI + (j+0.5)/nlon*2*Math.PI;
+      // lon=0 → +z; x=sin(lon)*cl? Our point: x south-east, y up, z forward
+      // lat from y=sin(lat), lon=atan2(x,z)
+      const x=Math.sin(lon)*cl, y=sl, z=Math.cos(lon)*cl;
+      const id=cellOff[i]+j;
+      cellXYZ[id*3]=x; cellXYZ[id*3+1]=y; cellXYZ[id*3+2]=z;
+    }
+  }
+})();
+function cellIndex(x,y,z){
+  const lat=Math.asin(Math.max(-1,Math.min(1,y)));
+  const lon=Math.atan2(x,z);
+  let i=Math.floor(lat*180/Math.PI+90);
+  if(i<0)i=0; if(i>=NLAT)i=NLAT-1;
+  const nlon=cellOff[i+1]-cellOff[i];
+  let t=(lon+Math.PI)/(2*Math.PI);
+  if(t>=1)t-=1; if(t<0)t+=1;
+  let j=Math.floor(t*nlon); if(j>=nlon)j=nlon-1; if(j<0)j=0;
+  return cellOff[i]+j;
+}
+function bumpCell(idx){
+  if(cellCounts[idx]===0){nonzero.push(idx); nonzeroSet.add(idx)}
+  cellCounts[idx]++;
+}
+/* ---- State ---- */
+const rings=[];
+const polesVisited=[];
 const poleSeen=new Set();
-let poleIdx=0, Afloat=0, lastDropped=-1, gNext=0;
-let last=0, play=true, speed=1, complete=false, camSpin=false, acc=0;
+let gNext=0, poleIdx=0, Afloat=0, lastDropped=-1;
+let last=0, play=true, speed=1, camSpin=false, acc=0;
+let lastSave=0, maxCount=1;
 
 const V={yaw:.35,pitch:20*Math.PI/180,userZoom:1.4,fit:1.0,dragging:false,vy:0,vp:0,pinch0:0,uz0:1,midX:0,midY:0,lastTap:0};
 const touches=new Map();
 const hasTouch=('ontouchstart' in window)||(navigator.maxTouchPoints>0);
 
-function hueOf(A){return 330 - 285*(A/Math.max(1,PER-1))}
+function hueOf(A){return 330-285*(A/Math.max(1,PER-1))}
 function clampUz(z){return Math.min(UZ_MAX,Math.max(UZ_MIN,z))}
 function size(){
   const dpr=Math.min(window.devicePixelRatio||1,2.5);
@@ -129,44 +163,102 @@ function size(){
 function applyRotate(dx,dy){V.yaw+=dx*.009;V.pitch=Math.max(-1.55,Math.min(1.55,V.pitch+dy*.009));V.vy=dx*.009;V.vp=dy*.009}
 function resetView(){V.userZoom=1.4;V.yaw=.35;V.pitch=20*Math.PI/180;V.vy=0;V.vp=0}
 function markPole(T,D){
-  const key=T+','+D;
-  if(poleSeen.has(key))return;
-  poleSeen.add(key);
-  polesVisited.push({T,D});
+  const key=T+','+D; if(poleSeen.has(key))return;
+  poleSeen.add(key); polesVisited.push({T,D});
 }
-function dropRing(poleI, A){
-  const p=POLES[poleI];
+function dropRing(pIdx,A){
+  const p=POLES[pIdx];
   const g=gNext++;
-  const th=bandThetas(g);
-  rings.push({poleIdx:poleI,A,T:p.T,D:p.D,th:new Float32Array(th),g});
+  const ths=bandThetas(g);
+  for(let i=0;i<ths.length;i++){
+    const pt=pointOnRing(p.T,p.D,A,ths[i]);
+    const id=cellIndex(pt[0],pt[1],pt[2]);
+    bumpCell(id);
+    if(cellCounts[id]>maxCount)maxCount=cellCounts[id];
+  }
+  rings.push({poleIdx:pIdx,A,T:p.T,D:p.D,th:new Float32Array(ths),g});
   while(rings.length>MAX_KEEP) rings.shift();
   markPole(p.T,p.D);
+};
+
+function clearOverlap(){
+  cellCounts.fill(0); nonzero.length=0; nonzeroSet.clear(); maxCount=1;
 }
-function restart(){
+function wipeRestart(){
+  try{localStorage.removeItem(STORE_KEY)}catch(_){}
   rings.length=0; polesVisited.length=0; poleSeen.clear();
-  poleIdx=0; Afloat=0; lastDropped=-1; gNext=0;
-  last=0; acc=0; complete=false; play=true; resetView();
+  clearOverlap();
+  gNext=0; poleIdx=0; Afloat=0; lastDropped=-1;
+  last=0; acc=0; play=true; resetView();
   markPole(0,0);
 }
+
+/* ---- Persistence ---- */
+function saveState(){
+  try{
+    const pairs=[];
+    for(let i=0;i<nonzero.length;i++){
+      const id=nonzero[i], c=cellCounts[id];
+      if(c) pairs.push(id,c);
+    }
+    const payload={v:5,g:gNext,poleIdx,Afloat,lastDropped,maxCount,pairs};
+    localStorage.setItem(STORE_KEY, JSON.stringify(payload));
+    lastSave=performance.now();
+  }catch(e){/* quota */}
+}
+function loadState(){
+  try{
+    const raw=localStorage.getItem(STORE_KEY);
+    if(!raw)return false;
+    const o=JSON.parse(raw);
+    if(!o||o.v!==5)return false;
+    clearOverlap();
+    const pairs=o.pairs||[];
+    for(let i=0;i<pairs.length;i+=2){
+      const id=pairs[i]|0, c=pairs[i+1]|0;
+      if(id>=0&&id<NCELL&&c>0){cellCounts[id]=c;nonzero.push(id);nonzeroSet.add(id);if(c>maxCount)maxCount=c}
+    }
+    gNext=o.g|0; poleIdx=((o.poleIdx|0)%N_POLES+N_POLES)%N_POLES;
+    Afloat=+o.Afloat||0; lastDropped=o.lastDropped|0;
+    if(o.maxCount)maxCount=o.maxCount;
+    // rebuild a short trail around current position
+    rings.length=0;
+    const start=Math.max(0,gNext-MAX_KEEP);
+    for(let g=start;g<gNext;g++){
+      const {pi,A,T,D}=poleOfG(g);
+      rings.push({poleIdx:pi,A,T,D,th:new Float32Array(bandThetas(g)),g});
+    }
+    markPole(POLES[poleIdx].T,POLES[poleIdx].D);
+    for(let i=0;i<=poleIdx && i<N_POLES;i++) markPole(POLES[i].T,POLES[i].D);
+    return true;
+  }catch(e){return false}
+}
+
+/** Jump to end of pole P; fills overlap for all bands 0..endG (may take a moment for large P). */
 function jumpToPole(P){
   P=Math.max(0,Math.min(N_POLES-1,P|0));
-  rings.length=0; polesVisited.length=0; poleSeen.clear();
-  // seed trail: mark all poles up to P, drop last MAX_KEEP rings ending at end of pole P
-  for(let i=0;i<=P;i++) markPole(POLES[i].T,POLES[i].D);
-  const endG=(P+1)*PER - 1;
-  const startG=Math.max(0, endG-(MAX_KEEP-1));
-  gNext=startG;
-  for(let g=startG;g<=endG;g++){
-    const pi=(g/PER)|0, A=g%PER;
-    const p=POLES[pi];
-    rings.push({poleIdx:pi,A,T:p.T,D:p.D,th:new Float32Array(bandThetas(g)),g});
+  rings.length=0; polesVisited.length=0; poleSeen.clear(); clearOverlap();
+  const endG=(P+1)*PER-1;
+  // Fill overlap + keep last MAX_KEEP as trail
+  const trailStart=Math.max(0,endG-(MAX_KEEP-1));
+  for(let g=0;g<=endG;g++){
+    const {pi,A,T,D}=poleOfG(g);
+    const ths=bandThetas(g);
+    for(let i=0;i<ths.length;i++){
+      const pt=pointOnRing(T,D,A,ths[i]);
+      const id=cellIndex(pt[0],pt[1],pt[2]);
+      bumpCell(id);
+      if(cellCounts[id]>maxCount)maxCount=cellCounts[id];
+    }
+    if(g>=trailStart){
+      rings.push({poleIdx:pi,A,T,D,th:new Float32Array(ths),g});
+    }
+    if((g%PER)===0) markPole(T,D);
   }
   gNext=endG+1;
-  poleIdx=P;
-  Afloat=PER; // at end of this pole's sweep
-  lastDropped=PER-1;
-  complete=gNext>=TOTAL_RINGS;
+  poleIdx=P; Afloat=PER; lastDropped=PER-1;
   play=false; acc=0;
+  saveState();
 }
 
 function frame(now){
@@ -174,34 +266,31 @@ function frame(now){
   const{dpr,W,H}=size();
   const dt=last?Math.min(64,now-last):16; last=now;
 
-  if(play&&!complete){
-    // advance continuous angle around current spin axis
-    const dA=(dt*speed)/DEG_MS; // degrees
+  if(play){
+    const dA=(dt*speed)/DEG_MS;
     Afloat+=dA;
-    while(Afloat>=PER && !complete){
-      // finish current pole, advance
-      if(lastDropped<PER-1){ // drop any remaining integers
+    // Forever: when finishing a pole, wrap poleIdx; g keeps growing via dropRing
+    while(Afloat>=PER){
+      if(lastDropped<PER-1){
         for(let a=lastDropped+1;a<PER;a++) dropRing(poleIdx,a);
         lastDropped=PER-1;
       }
-      Afloat-=PER; lastDropped=-1; poleIdx++;
-      if(poleIdx>=N_POLES){complete=true; Afloat=0; break}
+      Afloat-=PER; lastDropped=-1;
+      poleIdx=(poleIdx+1)%N_POLES; // wrap forever
       markPole(POLES[poleIdx].T,POLES[poleIdx].D);
     }
-    if(!complete){
-      const whole=Math.floor(Afloat);
-      while(lastDropped<whole){ lastDropped++; dropRing(poleIdx,lastDropped); }
-    }
+    const whole=Math.floor(Afloat);
+    while(lastDropped<whole){ lastDropped++; dropRing(poleIdx,lastDropped); }
   }
 
   if(!V.dragging){
     if(Math.abs(V.vy)+Math.abs(V.vp)>.00002){
       V.yaw+=V.vy; V.pitch=Math.max(-1.55,Math.min(1.55,V.pitch+V.vp));
       const damp=Math.pow(.92,dt/16); V.vy*=damp; V.vp*=damp;
-    }else if(camSpin){
-      V.yaw+=.00025*dt;
-    }
+    }else if(camSpin){ V.yaw+=.00025*dt; }
   }
+
+  if(now-lastSave>10000) saveState();
 
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.fillStyle='#05080f'; ctx.fillRect(0,0,W,H);
@@ -218,12 +307,12 @@ function frame(now){
     return[W/2+x1*sc*f, H/2-y2*sc*f, z2, f];
   }
 
-  // faint world polar axis
+  // polar axis
   const pn=pr(0,1.1,0), ps=pr(0,-1.1,0);
-  if(pn&&ps){ctx.strokeStyle='rgba(255,190,220,.25)';ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(pn[0],pn[1]);ctx.lineTo(ps[0],ps[1]);ctx.stroke()}
+  if(pn&&ps){ctx.strokeStyle='rgba(255,190,220,.22)';ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(pn[0],pn[1]);ctx.lineTo(ps[0],ps[1]);ctx.stroke()}
 
-  // FIXED spin axis for current pole (cyan) — does NOT precess within the pass
-  const curP=POLES[Math.min(poleIdx,N_POLES-1)];
+  // fixed spin axis
+  const curP=POLES[poleIdx];
   const ax=poleAxis(curP.T,curP.D);
   const t1=pr(ax[0]*1.12,ax[1]*1.12,ax[2]*1.12), t2=pr(-ax[0]*1.12,-ax[1]*1.12,-ax[2]*1.12);
   if(t1&&t2){ctx.strokeStyle='rgba(100,220,255,.55)';ctx.lineWidth=1.6;ctx.beginPath();ctx.moveTo(t1[0],t1[1]);ctx.lineTo(t2[0],t2[1]);ctx.stroke()}
@@ -231,81 +320,80 @@ function frame(now){
   // pink core
   const pc=pr(0,0,0);
   if(pc){
-    const g=ctx.createRadialGradient(pc[0],pc[1],0,pc[0],pc[1],22*pc[3]);
-    g.addColorStop(0,'rgba(255,120,200,.55)'); g.addColorStop(1,'rgba(255,80,160,0)');
-    ctx.fillStyle=g;ctx.beginPath();ctx.arc(pc[0],pc[1],22*pc[3],0,6.2832);ctx.fill();
-    ctx.fillStyle='rgba(255,160,220,.95)';ctx.beginPath();ctx.arc(pc[0],pc[1],2.6*pc[3],0,6.2832);ctx.fill();
+    const g=ctx.createRadialGradient(pc[0],pc[1],0,pc[0],pc[1],20*pc[3]);
+    g.addColorStop(0,'rgba(255,120,200,.5)'); g.addColorStop(1,'rgba(255,80,160,0)');
+    ctx.fillStyle=g;ctx.beginPath();ctx.arc(pc[0],pc[1],20*pc[3],0,6.2832);ctx.fill();
   }
 
-  // faint pole-trace: visited poles as tiny dots on the sphere
   ctx.globalCompositeOperation='lighter';
-  const stepP=polesVisited.length>2000?Math.ceil(polesVisited.length/2000):1;
+
+  // --- Permanent overlap map (under trail/live) ---
+  const logMax=Math.log(1+maxCount);
+  const nz=nonzero;
+  // subsample if huge
+  const stepM=nz.length>12000?Math.ceil(nz.length/12000):1;
+  for(let ii=0;ii<nz.length;ii+=stepM){
+    const id=nz[ii], c=cellCounts[id];
+    if(!c)continue;
+    const x=cellXYZ[id*3], y=cellXYZ[id*3+1], z=cellXYZ[id*3+2];
+    const p=pr(x,y,z); if(!p)continue;
+    const t=Math.log(1+c)/logMax; // 0..1
+    const hue=330-285*t; // pink → gold
+    const alpha=.12+.55*t;
+    const rr=Math.max(0.7,(1.0+2.2*t)*p[3]);
+    ctx.fillStyle='hsla('+hue+',90%,65%,'+alpha.toFixed(3)+')';
+    ctx.beginPath();ctx.arc(p[0],p[1],rr,0,6.2832);ctx.fill();
+  }
+
+  // pole-trace (visited)
+  const stepP=polesVisited.length>2500?Math.ceil(polesVisited.length/2500):1;
   for(let i=0;i<polesVisited.length;i+=stepP){
     const pv=polesVisited[i];
     const a=poleAxis(pv.T,pv.D);
-    const p=pr(a[0],a[1],a[2]);
-    if(!p)continue;
-    ctx.fillStyle='rgba(180,240,255,.35)';
-    ctx.beginPath();ctx.arc(p[0],p[1],Math.max(0.8,1.2*p[3]),0,6.2832);ctx.fill();
+    const p=pr(a[0],a[1],a[2]); if(!p)continue;
+    ctx.fillStyle='rgba(180,240,255,.3)';
+    ctx.beginPath();ctx.arc(p[0],p[1],Math.max(0.7,1.1*p[3]),0,6.2832);ctx.fill();
   }
 
-  // trail rings (dim), oldest→newest
+  // trail rings
   const n=rings.length;
   for(let i=0;i<n;i++){
     const r=rings[i];
     const age=n-1-i;
-    const bright=Math.max(.05, .55*Math.pow(.975,age));
+    const bright=Math.max(.05,.5*Math.pow(.975,age));
     const hue=hueOf(r.A);
     const ths=r.th;
     const step=age>50?2:1;
-    const proj=[];
     for(let j=0;j<ths.length;j+=step){
       const pt=pointOnRing(r.T,r.D,r.A,ths[j]);
-      const p=pr(pt[0],pt[1],pt[2]);
-      if(!p){proj.push(null);continue}
-      proj.push(p);
-      const rr=Math.max(.5,1.2*p[3]);
-      ctx.fillStyle='hsla('+hue+',90%,70%,'+(0.12+0.55*bright).toFixed(3)+')';
+      const p=pr(pt[0],pt[1],pt[2]); if(!p)continue;
+      const rr=Math.max(.45,1.1*p[3]);
+      ctx.fillStyle='hsla('+hue+',90%,72%,'+(0.1+0.5*bright).toFixed(3)+')';
       ctx.beginPath();ctx.arc(p[0],p[1],rr,0,6.2832);ctx.fill();
-    }
-    if(age<18){
-      ctx.strokeStyle='hsla('+hue+',80%,65%,'+(0.1*bright).toFixed(3)+')';
-      ctx.lineWidth=.45;ctx.beginPath();let started=false;
-      for(const p of proj){if(!p){started=false;continue}if(!started){ctx.moveTo(p[0],p[1]);started=true}else ctx.lineTo(p[0],p[1])}
-      ctx.stroke();
     }
   }
 
-  // LIVE ring — smoothly rotated about FIXED spin axis
-  if(!complete || Afloat>0){
-    const liveA=complete?0:Afloat;
-    const pinfo=POLES[Math.min(poleIdx,N_POLES-1)];
-    // use current pole's band for live display (primes of next integer drop, or last)
-    const liveG=gNext;
-    // sample densely along the circle for a bright continuous ring + primes of upcoming/current band
-    const thLive=bandThetas(Math.min(liveG, TOTAL_RINGS-1));
-    const hue=hueOf(liveA%PER);
-    const proj=[];
-    // draw smooth circle polyline (many samples) so rotation is obvious
+  // LIVE ring
+  {
+    const liveA=Afloat%PER;
+    const hue=hueOf(liveA);
     ctx.strokeStyle='hsla('+hue+',95%,70%,.85)';
     ctx.lineWidth=2.0; ctx.beginPath();
     let first=null;
     for(let s=0;s<=96;s++){
       const th=s/96*Math.PI*2;
-      const pt=pointOnRing(pinfo.T,pinfo.D,liveA,th);
-      const p=pr(pt[0],pt[1],pt[2]);
-      if(!p)continue;
+      const pt=pointOnRing(curP.T,curP.D,liveA,th);
+      const p=pr(pt[0],pt[1],pt[2]); if(!p)continue;
       if(!first){ctx.moveTo(p[0],p[1]);first=p} else ctx.lineTo(p[0],p[1]);
     }
     if(first){ctx.lineTo(first[0],first[1]);ctx.stroke()}
-    // prime dots on live ring
+    const thLive=bandThetas(gNext);
     for(let j=0;j<thLive.length;j++){
-      const pt=pointOnRing(pinfo.T,pinfo.D,liveA,thLive[j]);
-      const p=pr(pt[0],pt[1],pt[2]);
-      if(!p)continue;
-      const rr=Math.max(1.2,2.0*p[3]);
-      ctx.fillStyle='hsla('+hue+',95%,60%,.35)';
-      ctx.beginPath();ctx.arc(p[0],p[1],rr*2.4,0,6.2832);ctx.fill();
+      const pt=pointOnRing(curP.T,curP.D,liveA,thLive[j]);
+      const p=pr(pt[0],pt[1],pt[2]); if(!p)continue;
+      const rr=Math.max(1.1,1.9*p[3]);
+      ctx.fillStyle='hsla('+hue+',95%,60%,.3)';
+      ctx.beginPath();ctx.arc(p[0],p[1],rr*2.2,0,6.2832);ctx.fill();
       ctx.fillStyle='hsla('+hue+',95%,78%,.98)';
       ctx.beginPath();ctx.arc(p[0],p[1],rr,0,6.2832);ctx.fill();
     }
@@ -313,7 +401,7 @@ function frame(now){
   ctx.globalCompositeOperation='source-over';
 }
 
-/* ---- touch ---- */
+/* ---- input ---- */
 function touchList(e){const a=[];for(let i=0;i<e.touches.length;i++){const t=e.touches[i];a.push({id:t.identifier,x:t.clientX,y:t.clientY})}return a}
 function syncTouches(list){touches.clear();for(const t of list)touches.set(t.id,{x:t.x,y:t.y})}
 function pinchDist(list){if(list.length<2)return 0;return Math.hypot(list[0].x-list[1].x,list[0].y-list[1].y)}
@@ -362,8 +450,9 @@ if(hasTouch){
 }
 cv.addEventListener('wheel',e=>{e.preventDefault();V.userZoom=clampUz(V.userZoom*Math.exp(-e.deltaY*.0015))},{passive:false});
 window.addEventListener('resize',()=>size());
+window.addEventListener('pagehide',()=>saveState());
+document.addEventListener('visibilitychange',()=>{if(document.hidden)saveState()});
 
-let rvTaps=0, rvTimer=0;
 document.getElementById('zm').onclick=function(){V.userZoom=clampUz(V.userZoom/1.35)};
 document.getElementById('zp').onclick=function(){V.userZoom=clampUz(V.userZoom*1.35)};
 document.getElementById('pp').onclick=function(){play=!play;this.textContent=play?'❚❚':'▶'};
@@ -371,30 +460,56 @@ document.getElementById('sp').onclick=function(){
   speed=speed===1?4:speed===4?16:speed===16?64:1;
   this.textContent=speed+'×';
 };
-document.getElementById('rv').onclick=function(){
-  rvTaps++; clearTimeout(rvTimer);
-  if(rvTaps>=2){restart(); rvTaps=0}
-  else{resetView(); rvTimer=setTimeout(()=>{rvTaps=0},320)}
-};
-document.getElementById('rs').onclick=function(){
-  camSpin=!camSpin; this.classList.toggle('on',camSpin);
-};
+// ⟲: tap = reset view; long-press = wipe restart
+(function(){
+  const btn=document.getElementById('rv');
+  let tmr=0, pressed=false;
+  function start(){pressed=true; tmr=setTimeout(()=>{if(pressed){wipeRestart(); pressed=false}},650)}
+  function end(ev){
+    if(!pressed)return; pressed=false; clearTimeout(tmr);
+    // short tap
+    resetView();
+  }
+  btn.addEventListener('pointerdown',e=>{e.preventDefault();start()});
+  btn.addEventListener('pointerup',end);
+  btn.addEventListener('pointerleave',()=>{pressed=false;clearTimeout(tmr)});
+  btn.addEventListener('touchstart',e=>{e.preventDefault();start()},{passive:false});
+  btn.addEventListener('touchend',e=>{e.preventDefault();end()},{passive:false});
+})();
+document.getElementById('rs').onclick=function(){camSpin=!camSpin; this.classList.toggle('on',camSpin)};
 
 window.__sphereV=V; window.__sphereMarker=MARKER;
-window.__N_POLES=N_POLES; window.__TOTAL_RINGS=TOTAL_RINGS;
-window.__poleIdx=()=>poleIdx; window.__Afloat=()=>Afloat; window.__rings=()=>rings;
+window.__N_POLES=N_POLES; window.__NCELL=NCELL;
+window.__poleIdx=()=>poleIdx; window.__Afloat=()=>Afloat; window.__gNext=()=>gNext;
+window.__rings=()=>rings; window.__cellCounts=cellCounts; window.__nonzero=()=>nonzero;
 window.__jumpToPole=jumpToPole; window.__bandCount=g=>bandThetas(g).length;
-window.__pointOnRing=pointOnRing; window.__poleAxis=poleAxis;
-window.__setAfloat=function(a){Afloat=a; /* don't drop */};
-window.__forcePlay=function(v){play=!!v};
+window.__saveState=saveState; window.__loadState=loadState; window.__wipeRestart=wipeRestart;
+window.__forcePlay=v=>{play=!!v};
+window.__maxCount=()=>maxCount;
+window.__poleBiasCheck=function(){
+  // sample: any cell near poles (y>~0.999) counts
+  let north=0,south=0,nCells=0,sCells=0;
+  for(let i=0;i<nonzero.length;i++){
+    const id=nonzero[i], y=cellXYZ[id*3+1], c=cellCounts[id];
+    if(y>0.985){north+=c;nCells++} if(y<-0.985){south+=c;sCells++}
+  }
+  return {north,south,nCells,sCells,maxCount,note:'θ=0/180 impossible for odd primes'};
+};
 
-const jumpParam=new URLSearchParams(location.search).get('jump');
+const params=new URLSearchParams(location.search);
+const jumpParam=params.get('jump');
+const wipeParam=params.get('wipe');
+if(wipeParam!==null){ try{localStorage.removeItem(STORE_KEY)}catch(_){} }
+
+let restored=false;
 if(jumpParam!==null && jumpParam!==''){
   jumpToPole(+jumpParam);
   const pp=document.getElementById('pp'); if(pp) pp.textContent='▶';
+}else{
+  restored=loadState();
+  if(!restored) markPole(0,0);
 }
 
-markPole(0,0);
 size();
 requestAnimationFrame(frame);
 })();
