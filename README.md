@@ -1,7 +1,5 @@
 # Prime Ring Rotation
 
-**v3 (root):** rings are great circles through an axis tilted T° off the polar axis (toward +x), then swept azimuth A° clockwise. Passes T=0..179 × A=0..359 = 64,800 rings. Primes in band [360g, 360g+359] become dots.
+**v4 (root):** each pole gets a 360° meridian sweep *around that pole's fixed spin axis* (Rodrigues). Poles cover a 1° grid: D=0 T=0..180, then D=1..359 × T=1..180 → 64,801 poles (T=180 = south pole repeated per D). Live ring rotates continuously; trail + pole-trace dots. Camera auto-spin off (✦ toggles). Speed 1/4/16/64×.
 
-**v2 archive:** [/v2/](./v2/) — pure polar meridians only.
-
-Open the GitHub Pages URL on a phone. Wordless UI; drag / pinch / ±.
+Archives: [v3](./v3/) (tilt then world-y — buggy precession), [v2](./v2/) (polar meridians only).
