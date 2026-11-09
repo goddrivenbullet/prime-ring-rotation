@@ -8,7 +8,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#05080f">
 <title>Prime Ring Rotation</title>
-<!-- prime-ring-rotation-v5 -->
+<!-- prime-ring-rotation-v6 -->
 <style>
 html,body{margin:0;width:100%;height:100%;height:100dvh;background:#05080f;overflow:hidden;position:fixed;inset:0;touch-action:none;overscroll-behavior:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 canvas{display:block;width:100%;height:100%;touch-action:none;overscroll-behavior:none;outline:none}
@@ -31,8 +31,8 @@ canvas{display:block;width:100%;height:100%;touch-action:none;overscroll-behavio
 <script>
 (function(){
 'use strict';
-const MARKER='prime-ring-rotation-v5';
-const STORE_KEY='prr_v5_state';
+const MARKER='prime-ring-rotation-v6';
+const STORE_KEY='prr_v6_state';
 const cv=document.getElementById('c'),ctx=cv.getContext('2d',{alpha:false});
 
 /* ---- Miller–Rabin: deterministic for n < 3.317e24 with witnesses 2..41 ---- */
@@ -201,17 +201,23 @@ function saveState(){
       const id=nonzero[i], c=cellCounts[id];
       if(c) pairs.push(id,c);
     }
-    const payload={v:5,g:gNext,poleIdx,Afloat,lastDropped,maxCount,pairs};
-    localStorage.setItem(STORE_KEY, JSON.stringify(payload));
+    localStorage.setItem(STORE_KEY, JSON.stringify({v:6,g:gNext,poleIdx,Afloat,lastDropped,maxCount,pairs}));
     lastSave=performance.now();
-  }catch(e){/* quota */}
+  }catch(e){ try{localStorage.removeItem(STORE_KEY)}catch(_){ } }
+}
+function validState(o){
+  if(!o||o.v!==6)return false;
+  if(!Number.isFinite(o.g)||o.g<0)return false;
+  if(!Number.isFinite(o.Afloat)||o.Afloat<0||o.Afloat>PER*2)return false;
+  if(!Number.isFinite(o.lastDropped)||o.lastDropped<-1||o.lastDropped>=PER)return false;
+  return true;
 }
 function loadState(){
   try{
     const raw=localStorage.getItem(STORE_KEY);
     if(!raw)return false;
     const o=JSON.parse(raw);
-    if(!o||o.v!==5)return false;
+    if(!validState(o))return false;
     clearOverlap();
     const pairs=o.pairs||[];
     for(let i=0;i<pairs.length;i+=2){
@@ -263,24 +269,33 @@ function jumpToPole(P){
 
 function frame(now){
   requestAnimationFrame(frame);
+  try{
   const{dpr,W,H}=size();
   const dt=last?Math.min(64,now-last):16; last=now;
 
   if(play){
     const dA=(dt*speed)/DEG_MS;
     Afloat+=dA;
-    // Forever: when finishing a pole, wrap poleIdx; g keeps growing via dropRing
-    while(Afloat>=PER){
-      if(lastDropped<PER-1){
-        for(let a=lastDropped+1;a<PER;a++) dropRing(poleIdx,a);
-        lastDropped=PER-1;
+    if(!Number.isFinite(Afloat)||Afloat<0) Afloat=0;
+    // Cap work per frame so iPhone never freezes catching up
+    let budget=speed>=16?24:speed>=4?12:8;
+    while(budget>0){
+      if(Afloat>=PER && lastDropped>=PER-1){
+        Afloat-=PER; if(Afloat>=PER) Afloat=Afloat%PER;
+        lastDropped=-1; poleIdx=(poleIdx+1)%N_POLES;
+        markPole(POLES[poleIdx].T,POLES[poleIdx].D);
+        budget--; continue;
       }
-      Afloat-=PER; lastDropped=-1;
-      poleIdx=(poleIdx+1)%N_POLES; // wrap forever
-      markPole(POLES[poleIdx].T,POLES[poleIdx].D);
+      const due=Afloat>=PER?(PER-1):Math.floor(Afloat);
+      if(lastDropped<due && lastDropped<PER-1){
+        lastDropped++; dropRing(poleIdx,lastDropped); budget--; continue;
+      }
+      if(lastDropped<due && due===0 && lastDropped<0){
+        lastDropped++; dropRing(poleIdx,lastDropped); budget--; continue;
+      }
+      // due===0 & lastDropped===-1: lastDropped<0===lastDropped<due when due=0 → -1<0 true, lastDropped<PER-1 true
+      break;
     }
-    const whole=Math.floor(Afloat);
-    while(lastDropped<whole){ lastDropped++; dropRing(poleIdx,lastDropped); }
   }
 
   if(!V.dragging){
@@ -399,6 +414,7 @@ function frame(now){
     }
   }
   ctx.globalCompositeOperation='source-over';
+  }catch(err){ try{console.warn('prr frame',err)}catch(_){ } }
 }
 
 /* ---- input ---- */
